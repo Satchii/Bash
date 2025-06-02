@@ -1,5 +1,4 @@
 #!/bin/bash
-set -euo pipefail
 
 NEXTCLOUD_PATH="/var/www/nextcloud"
 NEXTCLOUD_WEB_USER="www-data"
