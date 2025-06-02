@@ -5,8 +5,8 @@ NEXTCLOUD_PATH="/var/www/nextcloud"
 NEXTCLOUD_WEB_USER="www-data"
 
 # --- PARAMÈTRES À ADAPTER ---
-SMB_SERVER_IP="192.168.135.14"            # Adresse IP du PC Windows
-SMB_SHARE_NAME_FIXED="DESKTOP-V3LBNSU"    # Nom du partage SMB racine
+SMB_SERVER_IP="192.168.135.14"
+SMB_SHARE_NAME_FIXED="DESKTOP-V3LBNSU"
 MOUNT_DISPLAY_NAME="Mon Dossier Personnel SMB Test"
 MOUNT_POINT="/MesFichiersSMBTest"
 # -----------------------------
@@ -19,11 +19,10 @@ echo "Point de montage Nextcloud: $MOUNT_POINT"
 echo "Nom affiché dans Nextcloud: $MOUNT_DISPLAY_NAME"
 echo "------------------------------------------------"
 
-# Récupérer tous les utilisateurs actifs Nextcloud
 USERS=$(sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH/occ" user:list --output=json | jq -r 'keys[]')
 
 if [ -z "$USERS" ]; then
-    echo "❌ Aucun utilisateur Nextcloud trouvé. Vérifiez les permissions."
+    echo "❌ Aucun utilisateur Nextcloud trouvé."
     exit 1
 fi
 
@@ -31,7 +30,6 @@ for USER_ID in $USERS; do
     echo ""
     echo "🔄 Traitement de l'utilisateur : $USER_ID"
 
-    # Vérifier si un montage existe déjà pour cet utilisateur
     MOUNT_EXISTS=$(sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH/occ" files_external:list "$USER_ID" --output=json | \
         jq -r --arg user_id "$USER_ID" \
               --arg smb_server_ip "$SMB_SERVER_IP" \
@@ -50,28 +48,23 @@ for USER_ID in $USERS; do
     else
         echo "➕ Aucun montage trouvé. Création en cours..."
 
-        # Étape 1 : Création du montage SMB
+        # ✅ Création du montage avec backend d'authentification correct
         MOUNT_ID=$(sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH/occ" files_external:create \
-            "$MOUNT_DISPLAY_NAME" \
+            "$MOUNT_POINT" \
             smb \
-            password::login credentials::save \
+            password::login \
             --config "host=$SMB_SERVER_IP,share=$SMB_SHARE_NAME_FIXED,subfolder=$USER_ID" \
-            --mount-point "$MOUNT_POINT" \
             --output=json | jq -r '.id')
 
         if [ -n "$MOUNT_ID" ]; then
-            echo "✅ Montage SMB créé avec succès (ID: $MOUNT_ID). Attribution en cours..."
-
-            # Étape 2 : Attribution du montage à l'utilisateur
+            echo "✅ Montage SMB créé (ID: $MOUNT_ID), attribution en cours..."
             sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH/occ" files_external:applicable "$MOUNT_ID" --add-user "$USER_ID"
-
-            echo "✅ Montage SMB attribué à l'utilisateur $USER_ID."
+            echo "✅ Montage attribué à l'utilisateur $USER_ID."
         else
-            echo "❌ Échec de la création du montage SMB pour $USER_ID."
+            echo "❌ Échec de la création du montage pour $USER_ID."
         fi
     fi
 done
 
 echo ""
-echo "--- Automatisation terminée pour tous les utilisateurs ---"
-echo "⚠️  Chaque utilisateur devra entrer ses identifiants SMB dans l'interface Nextcloud s'ils ne sont pas enregistrés."
+echo "--- Automatisation des montages SMB terminée ---"
