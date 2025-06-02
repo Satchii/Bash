@@ -1,14 +1,15 @@
 #!/bin/bash
 
+# Configuration
 NEXTCLOUD_PATH="/var/www/nextcloud"
 NEXTCLOUD_WEB_USER="www-data"
 
-# --- PARAMÈTRES À ADAPTER ---
-SMB_SERVER_IP="192.168.135.14"
-SMB_SHARE_NAME_FIXED="DESKTOP-V3LBNSU"
+# --- À personnaliser ---
+SMB_SERVER_IP="192.168.135.14"            # Adresse IP de la machine Windows
+SMB_SHARE_NAME_FIXED="DESKTOP-V3LBNSU"    # Nom du partage sur la machine Windows
 MOUNT_DISPLAY_NAME="Mon Dossier Personnel SMB Test"
 MOUNT_POINT="/MesFichiersSMBTest"
-# -----------------------------
+# ------------------------
 
 echo "------------------------------------------------"
 echo "--- Démarrage de l'automatisation SMB pour Nextcloud ---"
@@ -18,17 +19,18 @@ echo "Point de montage Nextcloud: $MOUNT_POINT"
 echo "Nom affiché dans Nextcloud: $MOUNT_DISPLAY_NAME"
 echo "------------------------------------------------"
 
+# Récupération des utilisateurs Nextcloud
 USERS=$(sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH/occ" user:list --output=json | jq -r 'keys[]')
 
 if [ -z "$USERS" ]; then
-    echo "❌ Aucun utilisateur Nextcloud trouvé."
+    echo "Aucun utilisateur Nextcloud trouvé. Vérifiez les permissions ou le chemin vers 'occ'."
     exit 1
 fi
 
 for USER_ID in $USERS; do
-    echo ""
-    echo "🔄 Traitement de l'utilisateur : $USER_ID"
+    echo "Traitement de l'utilisateur : $USER_ID"
 
+    # Vérifie si un montage SMB existe déjà pour cet utilisateur
     MOUNT_EXISTS=$(sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH/occ" files_external:list "$USER_ID" --output=json | \
         jq -r --arg user_id "$USER_ID" \
               --arg smb_server_ip "$SMB_SERVER_IP" \
@@ -43,27 +45,31 @@ for USER_ID in $USERS; do
               )] | length')
 
     if [ "$MOUNT_EXISTS" -gt 0 ]; then
-        echo "✅ Montage SMB déjà existant pour $USER_ID."
+        echo "Un montage SMB existe déjà pour cet utilisateur."
     else
-        echo "➕ Aucun montage trouvé. Création en cours..."
+        echo "Aucun montage SMB trouvé. Création en cours..."
 
-        # ✅ Création du montage avec backend d'authentification correct
-        MOUNT_ID=$(sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH/occ" files_external:create \
+        # Création du montage
+        OUTPUT=$(sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH/occ" files_external:create \
             "$MOUNT_POINT" \
             smb \
             password::login \
             --config "host=$SMB_SERVER_IP,share=$SMB_SHARE_NAME_FIXED,subfolder=$USER_ID" \
-            --output=json | jq -r '.id')
+            --output=json 2>&1)
 
-        if [ -n "$MOUNT_ID" ]; then
-            echo "✅ Montage SMB créé (ID: $MOUNT_ID), attribution en cours..."
+        if echo "$OUTPUT" | jq -e . >/dev/null 2>&1; then
+            MOUNT_ID=$(echo "$OUTPUT" | jq -r '.id')
+            echo "Montage SMB créé avec l'ID $MOUNT_ID. Attribution à l'utilisateur..."
+
+            # Attribution du montage à l'utilisateur
             sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH/occ" files_external:applicable "$MOUNT_ID" --add-user "$USER_ID"
-            echo "✅ Montage attribué à l'utilisateur $USER_ID."
+            echo "Montage attribué à l'utilisateur $USER_ID."
         else
-            echo "❌ Échec de la création du montage pour $USER_ID."
+            echo "Échec de la création du montage pour $USER_ID."
+            echo "Message retourné par Nextcloud :"
+            echo "$OUTPUT"
         fi
     fi
 done
 
-echo ""
-echo "--- Automatisation des montages SMB terminée ---"
+echo "--- Fin du script d'automatisation SMB ---"
