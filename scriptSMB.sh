@@ -21,7 +21,7 @@ echo "Point de montage interne  : $NEXTCLOUD_MOUNT_POINT"
 echo "Nom affiché dans Nextcloud: $NEXTCLOUD_LABEL"
 echo "------------------------------------------------"
 
-# Vérification de la version de jq (pour le débogage)
+# Vérification de la version de jq
 echo "Version de jq : $(jq --version)"
 
 # Récupérer tous les utilisateurs Nextcloud sauf les systèmes
@@ -35,28 +35,17 @@ fi
 for user in $users; do
     echo "Traitement de l'utilisateur : $user"
 
-    # Vérifier si un montage existe déjà pour cet utilisateur
-    # Simplification de la condition 'contains' pour plus de robustesse.
-    # Et ajout d'un debug pour voir la sortie brute de occ files_external:list
-    echo "DEBUG: Ligne 49: Exécution de files_external:list pour $user"
+    # Récupérer la sortie brute de occ files_external:list pour éviter de la réexécuter
+    # et pour faciliter le débogage si jq échoue
     OCC_LIST_OUTPUT=$(sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:list "$user" --output=json)
-    echo "DEBUG: Sortie brute de occ files_external:list : $OCC_LIST_OUTPUT"
+    # Si la sortie est trop grande, vous pouvez commenter la ligne ci-dessous
+    # echo "DEBUG: Sortie brute de occ files_external:list pour $user : $OCC_LIST_OUTPUT"
 
+    # Vérifier si un montage existe déjà pour cet utilisateur
+    # Filtre jq mis sur une seule ligne et toutes les variables passées avec --arg
     MOUNT_EXISTS=$(echo "$OCC_LIST_OUTPUT" | \
-                   jq -r --arg user_id "$user" \
-                   --arg smb_host "$SMB_HOST" \
-                   --arg share_name "$SHARE" \
-                   --arg mount_point_val "$NEXTCLOUD_MOUNT_POINT" \
-                   --arg label_val "$NEXTCLOUD_LABEL" \
-                   '[.[] | select(
-                       .backend == "smb" and
-                       .mount_point == $label_val and # Pour des versions plus récentes, c'est le label affiché.
-                       .configuration.host == $smb_host and
-                       .configuration.share == $share_name and
-                       .configuration.subfolder == $user_id and
-                       # Ligne 50 corrigée / simplifiée pour la compatibilité jq
-                       (.applicable_users[]? == $user_id) # Vérifie si l'ID utilisateur est un élément du tableau applicable_users
-                   )] | length')
+                   jq -r --arg user_id "$user" --arg smb_host "$SMB_HOST" --arg share_name "$SHARE" --arg mount_point_val "$NEXTCLOUD_MOUNT_POINT" --arg label_val "$NEXTCLOUD_LABEL" \
+                   '[.[] | select(.backend == "smb" and .mount_point == $label_val and .configuration.host == $smb_host and .configuration.share == $share_name and .configuration.subfolder == $user_id and (.applicable_users | contains([$user_id])))] | length')
 
     if [ "$MOUNT_EXISTS" -gt 0 ]; then
         echo "✅ Montage SMB déjà existant pour $user."
@@ -78,22 +67,15 @@ for user in $users; do
         --option "enable_sharing=true" \
         --option "save_login_credentials=true"
 
-    # Récupérer l'ID du montage après création pour vérifier s'il a bien été créé
-    # Utilisation de la sortie brute OCC_LIST_OUTPUT si elle est réutilisable, sinon nouvelle exécution.
-    # Pour la robustesse, on refait un appel occ ici.
-    id=$(sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:list "$user" --output=json | \
-         jq -r '.[] | select(
-             .mount_point == "'"$NEXTCLOUD_MOUNT_POINT"'" and # Le mount_point interne
-             .configuration.host == "'"$SMB_HOST"'" and
-             .configuration.share == "'"$SHARE"'" and
-             .configuration.subfolder == "'"$user"'" and
-             # Ligne corrigée / simplifiée pour la compatibilité jq
-             (.applicable_users[]? == "'"$user"'")
-         ) | .id')
+    # Récupérer l'ID du montage après création
+    # Filtre jq mis sur une seule ligne et toutes les variables passées avec --arg
+    id=$(echo "$OCC_LIST_OUTPUT" | \
+         jq -r --arg mount_point_val "$NEXTCLOUD_MOUNT_POINT" --arg smb_host "$SMB_HOST" --arg share_name "$SHARE" --arg user_id "$user" \
+         '.[] | select(.mount_point == $mount_point_val and .configuration.host == $smb_host and .configuration.share == $share_name and .configuration.subfolder == $user_id and (.applicable_users | contains([$user_id]))) | .id')
 
     if [[ -z "$id" ]]; then
         echo "❌ Erreur : impossible de récupérer l'ID du montage SMB pour $user après création."
-        echo "Vérifiez les journaux Nextcloud (Interface Admin > Journaux) et les sorties du script."
+        echo "Vérifiez les journaux Nextcloud (Interface Admin > Journaux)."
         echo "Assurez-vous que le chemin '\\\\$SMB_HOST\\$SHARE\\$user' existe sur le serveur SMB et que les permissions sont correctes."
         continue
     fi
