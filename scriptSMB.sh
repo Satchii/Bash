@@ -37,6 +37,7 @@ fi
 
 for user in $users; do
     echo "Traitement de l'utilisateur : $user"
+    SHARE=$user   # Le nom du partage SMB sur votre PC Windows
 
     # Récupérer la sortie brute de 'occ files_external:list' pour cet utilisateur.
     # On la réutilise pour la vérification MOUNT_EXISTS et pour la récupération de l'ID.
