@@ -2,7 +2,6 @@
 
 # ======================== CONFIGURATION ========================
 SMB_HOST="192.168.135.14" # L'adresse IP de votre PC Windows où se trouve le partage SMB
-SHARE=$user   # Le nom du partage SMB sur votre PC Windows
 # ATTENTION : NEXTCLOUD_MOUNT_POINT sera utilisé comme le point de montage interne (le chemin d'accès)
 # ET comme le nom affiché dans l'interface Nextcloud pour ce stockage externe.
 NEXTCLOUD_MOUNT_POINT="/MesFichiersSMBTest"
@@ -29,6 +28,7 @@ echo "Version de jq : $(jq --version)"
 
 # Récupérer tous les utilisateurs Nextcloud (sauf les systèmes comme guest, oc_ldap_user_manager, etc.)
 users=$(sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ user:list --output=json | jq -r 'keys[]')
+SHARE=$user   # Le nom du partage SMB sur votre PC Windows
 
 if [ -z "$users" ]; then
     echo "Aucun utilisateur Nextcloud trouvé. Vérifiez les permissions ou le chemin vers occ."
