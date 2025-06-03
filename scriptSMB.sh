@@ -2,7 +2,7 @@
 
 # ======================== CONFIGURATION ========================
 SMB_HOST="192.168.135.14" # L'adresse IP de votre PC Windows où se trouve le partage SMB
-SHARE="DESKTOP-V3LBNSU"   # Le nom du partage SMB sur votre PC Windows
+SHARE=$user   # Le nom du partage SMB sur votre PC Windows
 # ATTENTION : NEXTCLOUD_MOUNT_POINT sera utilisé comme le point de montage interne (le chemin d'accès)
 # ET comme le nom affiché dans l'interface Nextcloud pour ce stockage externe.
 NEXTCLOUD_MOUNT_POINT="/MesFichiersSMBTest"
