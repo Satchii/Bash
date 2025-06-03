@@ -3,27 +3,25 @@
 # ======================== CONFIGURATION ========================
 SMB_HOST="192.168.135.14"
 SHARE="DESKTOP-V3LBNSU"
-NEXTCLOUD_MOUNT_POINT="/MesFichiersSMBTest" # Chemin interne visible dans Nextcloud
-NEXTCLOUD_LABEL="Mon Dossier Personnel SMB Test" # Nom affiché dans l'interface
-
+NEXTCLOUD_MOUNT="/MesFichiersSMBTest" # Point de montage interne dans Nextcloud
+NEXTCLOUD_LABEL="Mon Dossier Personnel SMB Test" # Nom affiché dans l'interface Nextcloud
 DOMAIN="" # Laissez vide si pas de domaine Active Directory spécifique
 
 # Chemin absolu vers votre installation Nextcloud
 NEXTCLOUD_PATH="/var/www/nextcloud"
-NEXTCLOUD_WEB_USER="www-data" # L'utilisateur sous lequel Nextcloud tourne
 # ==============================================================
 
 echo "------------------------------------------------"
 echo "--- Démarrage de l'automatisation SMB pour Nextcloud ---"
 echo "Serveur SMB ciblé         : $SMB_HOST"
 echo "Partage SMB fixe sur PC   : \\\\$SMB_HOST\\$SHARE"
-echo "Point de montage interne  : $NEXTCLOUD_MOUNT_POINT"
+echo "Point de montage Nextcloud: $NEXTCLOUD_MOUNT"
 echo "Nom affiché dans Nextcloud: $NEXTCLOUD_LABEL"
 echo "------------------------------------------------"
 
 # Récupérer tous les utilisateurs Nextcloud sauf les systèmes
 # Note : 'keys[]' est utilisé car votre 'occ user:list --output=json' retourne un objet, pas un tableau d'objets avec 'id'.
-users=$(sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ user:list --output=json | jq -r 'keys[]')
+users=$(sudo -u www-data php "$NEXTCLOUD_PATH"/occ user:list --output=json | jq -r 'keys[]')
 
 if [ -z "$users" ]; then
     echo "Aucun utilisateur Nextcloud trouvé. Vérifiez les permissions ou le chemin vers occ."
@@ -34,20 +32,20 @@ for user in $users; do
     echo "Traitement de l'utilisateur : $user"
 
     # Vérifier si un montage existe déjà pour cet utilisateur
-    # On cherche un montage SMB avec le bon hôte, partage, sous-dossier, POINT DE MONTAGE INTERNE ET APPLICABLE A L'UTILISATEUR
-    MOUNT_EXISTS=$(sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:list "$user" --output=json | \
+    # On cherche un montage SMB avec le bon hôte, partage, sous-dossier, POINT DE MONTAGE ET label.
+    MOUNT_EXISTS=$(sudo -u www-data php "$NEXTCLOUD_PATH"/occ files_external:list "$user" --output=json | \
                    jq -r --arg user_id "$user" \
                    --arg smb_host "$SMB_HOST" \
                    --arg share_name "$SHARE" \
-                   --arg mount_point_val "$NEXTCLOUD_MOUNT_POINT" \
+                   --arg mount_point_val "$NEXTCLOUD_MOUNT" \
                    --arg label_val "$NEXTCLOUD_LABEL" \
                    '[.[] | select(
                        .backend == "smb" and
-                       .mount_point == $label_val and # Pour des versions plus récentes, c'est le label affiché.
+                       .mount_point == $label_val and # Ancien Nextcloud utilise le label comme mount_point, récent le chemin
                        .configuration.host == $smb_host and
                        .configuration.share == $share_name and
                        .configuration.subfolder == $user_id and
-                       (.applicable_users | contains([$user_id])) # Vérifie que c'est bien applicable à cet utilisateur
+                       (.applicable_users | contains([$user_id]))
                    )] | length')
 
     if [ "$MOUNT_EXISTS" -gt 0 ]; then
@@ -58,41 +56,29 @@ for user in $users; do
     echo "Aucun montage SMB trouvé. Création en cours..."
 
     # Créer le montage SMB avec --mount-point
-    # La syntaxe pour Nextcloud 25+ est :
-    # files_external:create [--user <user>] [-c|--config <config>] [--applicable-users <user list>]
-    #                       [--mount-point <mount_point>] [--option <option>] <label> <storage_backend> <authentication_backend>
-
-    sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:create \
-        "$NEXTCLOUD_LABEL" \
-        smb \
-        password::logincredentials \
-        --config "host=$SMB_HOST" \
-        --config "share=$SHARE" \
-        --config "subfolder=$user" \
-        --mount-point "$NEXTCLOUD_MOUNT_POINT" \
+    # Nextcloud 31.0.5 devrait supporter '--mount-point'.
+    # Les guillemets autour des variables sont cruciaux pour la syntaxe bash.
+    sudo -u www-data php "$NEXTCLOUD_PATH"/occ files_external:create "$NEXTCLOUD_LABEL" smb \
+        --config "host=$SMB_HOST,share=$SHARE,subfolder=$user" \
+        --mount-pointsz "$NEXTCLOUD_MOUNT" \
         --applicable-users "$user" \
-        --option "enable_sharing=true" \
-        --option "save_login_credentials=true" # Rétabli cette option car elle est la bonne pour les versions modernes
+        --option "save_login_credentials=true" \
+        --option "enable_sharing=true"
 
     # Récupérer l'ID du montage après création pour vérifier s'il a bien été créé
-    # J'ai ajouté l'argument "$user" à files_external:list pour filtrer les montages de cet utilisateur
-    id=$(sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:list "$user" --output=json | \
-         jq -r '.[] | select(
-             .mount_point == "'"$NEXTCLOUD_MOUNT_POINT"'" and # Le mount_point interne
-             .configuration.host == "'"$SMB_HOST"'" and
-             .configuration.share == "'"$SHARE"'" and
-             .configuration.subfolder == "'"$user"'" and
-             (.applicable_users | contains(["'"$user"'"]))
-         ) | .id')
+    # On utilise maintenant le label comme le point de montage dans la vérification pour la compatibilité
+    # avec la façon dont occ list retourne le "mount_point" pour les versions > 25 et < 27.
+    id=$(sudo -u www-data php "$NEXTCLOUD_PATH"/occ files_external:list "$user" --output=json | \
+         jq -r '.[] | select(.mount_point == "'"$NEXTCLOUD_MOUNT"'" and (.applicable_users | contains(["'"$user"'"])) ) | .id')
 
     if [[ -z "$id" ]]; then
         echo "❌ Erreur : impossible de récupérer l'ID du montage SMB pour $user après création."
-        echo "Vérifiez les journaux Nextcloud (Interface Admin > Journaux) et les sorties du script."
-        echo "Assurez-vous que le chemin '\\\\$SMB_HOST\\$SHARE\\$user' existe sur le serveur SMB et que les permissions sont correctes."
+        echo "Vérifiez les journaux Nextcloud pour des erreurs (Interface Admin > Journaux)."
+        echo "Vérifiez que le chemin '\\\\$SMB_HOST\\$SHARE\\$user' existe sur le serveur SMB et que les permissions sont correctes."
         continue
     fi
 
-    echo "✅ Montage configuré pour l'utilisateur $user (ID: $id)."
+    echo "✅ Montage configuré pour l'utilisateur $user."
 done
 
 echo "--- Fin du script d'automatisation SMB ---"
