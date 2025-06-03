@@ -42,7 +42,6 @@ for user in $users; do
     OCC_LIST_OUTPUT=$(sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:list "$user" --output=json)
 
     # Vérifier si un montage existe déjà pour cet utilisateur
-    # Le filtre jq utilise NEXTCLOUD_MOUNT_POINT comme le nom affiché (mount_point)
     MOUNT_EXISTS=$(echo "$OCC_LIST_OUTPUT" | \
                    jq -r --arg user_id "$user" --arg smb_host "$SMB_HOST" --arg share_name "$SHARE" --arg mount_point_val "$NEXTCLOUD_MOUNT_POINT" \
                    '[.[] | select(.backend == "smb" and .mount_point == $mount_point_val and .configuration.host == $smb_host and .configuration.share == $share_name and .configuration.subfolder == $user_id and (.applicable_users | contains([$user_id])))] | length')
@@ -54,25 +53,18 @@ for user in $users; do
 
     echo "Aucun montage SMB trouvé. Création en cours..."
 
-    # Créer le montage SMB - SANS l'option --applicable-users
+    # Créer le montage SMB - SYNTAXE ADAPTÉE À VOTRE OCC
     # Le premier argument est le mount_point (nom affiché et chemin interne)
+    # Toutes les options spécifiques au stockage (partage, sous-dossier, enable_sharing, save_login_credentials)
+    # sont passées via le paramètre --config, séparées par des virgules.
     sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:create \
         "$NEXTCLOUD_MOUNT_POINT" \
         smb \
         password::logincredentials \
-        --config "host=$SMB_HOST" \
-        --config "share=$SHARE" \
-        --config "subfolder=$user" \
-        --option "enable_sharing=true" \
-        --option "save_login_credentials=true" # Utilise les identifiants Nextcloud de l'utilisateur
+        --config "host=$SMB_HOST,share=$SHARE,subfolder=$user,enable_sharing=true,save_login_credentials=true"
 
     # Récupérer l'ID du montage après création
-    # On filtre sur tous les montages créés, puis on attribue.
-    # Ici, on ne peut pas filtrer par `applicable_users` car il n'est pas encore assigné.
-    # On cherche le montage par ses autres propriétés (point de montage, config SMB)
-    # Assurez-vous que le mount_point est unique pour chaque utilisateur.
-    # (Ce script le rend unique par user, mais le mount_point est partagé, donc on va chercher par le plus d'attributs possibles)
-    id=$(sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:list --output=json | \
+    id=$(echo "$OCC_LIST_OUTPUT" | \
          jq -r --arg mount_point_val "$NEXTCLOUD_MOUNT_POINT" --arg smb_host "$SMB_HOST" --arg share_name "$SHARE" --arg user_id "$user" \
          '.[] | select(.mount_point == $mount_point_val and .configuration.host == $smb_host and .configuration.share == $share_name and .configuration.subfolder == $user_id) | .id')
 
