@@ -28,7 +28,7 @@ echo "Version de jq : $(jq --version)"
 
 # Récupérer tous les utilisateurs Nextcloud (sauf les systèmes comme guest, oc_ldap_user_manager, etc.)
 users=$(sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ user:list --output=json | jq -r 'keys[]')
-SHARE=$user   # Le nom du partage SMB sur votre PC Windows
+SHARE=$users   # Le nom du partage SMB sur votre PC Windows
 
 if [ -z "$users" ]; then
     echo "Aucun utilisateur Nextcloud trouvé. Vérifiez les permissions ou le chemin vers occ."
