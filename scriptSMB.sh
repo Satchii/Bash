@@ -52,20 +52,22 @@ if [[ -n "$MOUNT_ID" ]]; then
     echo "✅ Montage SMB existant (ID: $MOUNT_ID) trouvé pour $NEXTCLOUD_MOUNT_POINT. Vérification/Mise à jour de la configuration et de l'attribution..."
 else
     echo "Aucun montage SMB existant pour $NEXTCLOUD_MOUNT_POINT. Création d'un nouveau montage..."
-    # Créer le montage de base AVEC la méthode d'authentification spécifiée
-    sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:create \
+    
+    # Exécuter la commande et capturer la sortie complète
+    CREATE_OUTPUT=$(sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:create \
         "$NEXTCLOUD_MOUNT_POINT" \
         smb \
-        "$AUTHENTICATION_BACKEND" # MAINTENANT CORRECT : "password::password"
+        "$AUTHENTICATION_BACKEND" 2>&1) # Capture stdout et stderr
+    
+    echo "$CREATE_OUTPUT" # Afficher la sortie pour le diagnostic
 
-    # Récupérer l'ID du montage nouvellement créé.
-    MOUNT_ID=$(sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:list --output=json | \
-               jq -r --arg mount_point_val "$NEXTCLOUD_MOUNT_POINT" \
-               '.[] | select(.mount_point == $mount_point_val and .backend == "smb") | .id' | head -n 1)
+    # Tenter de parser l'ID de la sortie. On cherche "Storage created with id X"
+    MOUNT_ID=$(echo "$CREATE_OUTPUT" | grep -oP 'Storage created with id \K\d+' | head -n 1)
 
     if [[ -z "$MOUNT_ID" ]]; then
         echo "❌ Erreur CRITIQUE : Impossible d'obtenir un ID de montage après la création de base pour $NEXTCLOUD_MOUNT_POINT."
-        echo "Ceci peut indiquer que la création a échoué silencieusement. Vérifiez les journaux Nextcloud."
+        echo "Le message de création de stockage n'a pas été trouvé ou n'a pas pu être parsé."
+        echo "Vérifiez les journaux Nextcloud pour plus de détails."
         exit 1
     fi
     echo "Montage de base créé avec l'ID $MOUNT_ID."
