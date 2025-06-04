@@ -13,7 +13,7 @@ echo "--- Création de montages SMB personnalisés pour chaque utilisateur Nextc
 
 # Vérification de jq
 if ! command -v jq &> /dev/null; then
-    echo "❌ jq est requis mais non installé. Installez-le avec : sudo apt install jq"
+    echo "jq est requis mais non installé. Installez-le avec : sudo apt install jq"
     exit 1
 fi
 
@@ -32,7 +32,7 @@ for USER in $USERS; do
         '.[] | select(.mount_point == $mp and (.applicable_users | index($user))) | .id' | head -n1)
 
     if [[ -n "$EXISTING_ID" ]]; then
-        echo "✅ Montage déjà existant pour $USER (ID $EXISTING_ID), on passe."
+        echo "Montage déjà existant pour $USER (ID $EXISTING_ID), on passe."
         continue
     fi
 
@@ -41,7 +41,7 @@ for USER in $USERS; do
     MOUNT_ID=$(echo "$CREATE_OUT" | grep -oP 'Storage created with id \K\d+')
 
     if [[ -z "$MOUNT_ID" ]]; then
-        echo "❌ Échec de la création du montage pour $USER"
+        echo "Échec de la création du montage pour $USER"
         echo "$CREATE_OUT"
         continue
     fi
@@ -55,7 +55,7 @@ for USER in $USERS; do
     # Attribuer au bon utilisateur
     sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:applicable "$MOUNT_ID" --add-user "$USER"
 
-    echo "✅ Montage SMB créé pour $USER -> \\\\$SMB_HOST\\$SMB_SHARE_PATH (ID $MOUNT_ID)"
+    echo "Montage SMB créé pour $USER -> \\\\$SMB_HOST\\$SMB_SHARE_PATH (ID $MOUNT_ID)"
 done
 
 echo "--- Fin du script ---"
