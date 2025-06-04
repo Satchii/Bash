@@ -2,13 +2,22 @@
 
 # ======================== CONFIGURATION ========================
 SMB_HOST="192.168.135.14" # L'adresse IP de votre PC Windows où se trouve le partage SMB
-SMB_SHARE_NAME="Other"    # Le nom du partage SMB sur votre PC Windows (confirmé par image_87515c.png)
-# Le sous-dossier distant est le nom de l'utilisateur, ce qui donne \\192.168.135.14\Other\Other pour l'utilisateur Other
+SMB_SHARE_NAME="Other"    # Le nom du partage SMB sur votre PC Windows (si c'est le seul partage)
+
+# IMPORTANT : Le sous-dossier distant est omis car le partage cible directement le dossier souhaité.
+# Cela signifie que le chemin SMB final sera \\192.168.135.14\Other pour TOUS les utilisateurs.
+
 # ATTENTION : NEXTCLOUD_MOUNT_POINT sera utilisé comme le point de montage interne (le chemin d'accès)
 # ET comme le nom affiché dans l'interface Nextcloud pour ce stockage externe.
-NEXTCLOUD_MOUNT_POINT="/MesFichiersSMBTest"
+NEXTCLOUD_MOUNT_POINT="/MesFichiersSMBTest" # Ce dossier apparaîtra pour tous les utilisateurs.
 # NEXTCLOUD_LABEL n'est plus utilisé comme argument séparé dans la création, mais pour la clarté des messages.
-NEXTCLOUD_LABEL="Mon Dossier Personnel SMB Test (alias MesFichiersSMBTest)"
+NEXTCLOUD_LABEL="Mon Dossier SMB Global (alias MesFichiersSMBTest)"
+
+# Pour l'authentification, nous utiliserons les identifiants de l'utilisateur 'admin' de Windows
+# ou de tout autre utilisateur Windows ayant accès au partage 'Other'.
+# Idéalement, cet utilisateur Windows 'SMB_USER' devrait avoir les droits de lecture/écriture sur le partage 'Other'.
+SMB_USER="admin" # Nom d'utilisateur Windows pour l'authentification au partage SMB
+SMB_PASSWORD="[VOTRE_MOT_DE_PASSE_WINDOWS_POUR_ADMIN]" # Mot de passe Windows pour l'utilisateur 'admin'
 
 DOMAIN="" # Laissez vide si vous n'êtes pas dans un domaine Active Directory spécifique
 
@@ -22,87 +31,78 @@ echo "--- Démarrage de l'automatisation SMB pour Nextcloud ---"
 echo "Serveur SMB ciblé         : $SMB_HOST"
 echo "Partage SMB Windows       : \\\\$SMB_HOST\\$SMB_SHARE_NAME"
 echo "Point de montage interne  : $NEXTCLOUD_MOUNT_POINT"
-echo "Nom affiché dans Nextcloud: $NEXTCLOUD_MOUNT_POINT (sera identique au point de montage)"
+echo "Nom affiché dans Nextcloud: $NEXTCLOUD_MOUNT_POINT"
+echo "Utilisateur SMB pour auth.: $SMB_USER"
 echo "------------------------------------------------"
 
 # Vérification de la version de jq (outil nécessaire pour parser le JSON)
 echo "Version de jq : $(jq --version)"
 
-# Récupérer tous les utilisateurs Nextcloud (sauf les systèmes comme guest, oc_ldap_user_manager, etc.)
-users=$(sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ user:list --output=json | jq -r 'keys[]')
+# --- Étape 1 : Vérifier si le montage existe déjà et le créer si nécessaire ---
 
-if [ -z "$users" ]; then
-    echo "Aucun utilisateur Nextcloud trouvé. Vérifiez les permissions ou le chemin vers occ."
-    exit 1
+# Rechercher un ID de montage existant qui correspond à cette configuration spécifique (sans subfolder)
+# Nous ne vérifions plus l'attribution à un utilisateur spécifique ici, car le montage est global.
+MOUNT_ID=$(sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:list --output=json | \
+           jq -r --arg smb_host "$SMB_HOST" --arg smb_share "$SMB_SHARE_NAME" --arg mount_point_val "$NEXTCLOUD_MOUNT_POINT" \
+           '.[] | select(.backend == "smb" and .mount_point == $mount_point_val and .configuration.host == $smb_host and .configuration.share == $smb_share and (.configuration.subfolder == "" or .configuration.subfolder == null)) | .id' | head -n 1)
+
+if [[ -n "$MOUNT_ID" ]]; then
+    echo "✅ Montage SMB existant (ID: $MOUNT_ID) trouvé pour $NEXTCLOUD_MOUNT_POINT. Vérification/Mise à jour de la configuration et de l'attribution..."
+else
+    echo "Aucun montage SMB existant pour $NEXTCLOUD_MOUNT_POINT. Création d'un nouveau montage..."
+    # Créer le montage de base. L'authentification est définie au niveau du montage global.
+    sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:create \
+        "$NEXTCLOUD_MOUNT_POINT" \
+        smb \
+        username::password \
+        --config "user=$SMB_USER,password=$SMB_PASSWORD"
+
+    # Récupérer l'ID du montage nouvellement créé.
+    # On filtre par mount_point et backend "smb", et on prend le plus récent ou le premier trouvé.
+    MOUNT_ID=$(sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:list --output=json | \
+               jq -r --arg mount_point_val "$NEXTCLOUD_MOUNT_POINT" \
+               '.[] | select(.mount_point == $mount_point_val and .backend == "smb") | .id' | head -n 1)
+
+    if [[ -z "$MOUNT_ID" ]]; then
+        echo "❌ Erreur CRITIQUE : Impossible d'obtenir un ID de montage après la création de base pour $NEXTCLOUD_MOUNT_POINT."
+        echo "Ceci peut indiquer que la création a échoué silencieusement. Vérifiez les journaux Nextcloud."
+        exit 1
+    fi
+    echo "Montage de base créé avec l'ID $MOUNT_ID."
+
+    # Configurer les détails SMB (hôte, partage) en utilisant files_external:config
+    echo "Configuration des détails SMB pour le montage (ID: $MOUNT_ID)..."
+    sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:config "$MOUNT_ID" host "$SMB_HOST"
+    sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:config "$MOUNT_ID" share "$SMB_SHARE_NAME"
+    # PAS DE SOUS-DOSSIER.
+    sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:config "$MOUNT_ID" enable_sharing "true"
+    sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:config "$MOUNT_ID" save_login_credentials "true"
+    # Authentification si non incluse dans create (selon la version de Nextcloud)
+    sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:config "$MOUNT_ID" user "$SMB_USER"
+    sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:config "$MOUNT_ID" password "$SMB_PASSWORD"
+
 fi
 
-for user in $users; do
-    echo "Traitement de l'utilisateur : $user"
+# --- Étape 2 : Attribuer le montage à tous les utilisateurs (si c'est le comportement désiré) ---
 
-    # La sortie de files_external:list n'est pas fiable pour 'applicable_users' avant l'attribution,
-    # donc on va simplement chercher un montage existant qui correspond aux paramètres.
-    # Et ensuite vérifier s'il est attribué.
-
-    # Rechercher un ID de montage existant qui correspond à cette configuration spécifique pour cet utilisateur
-    # (basé sur host, share, subfolder)
-    current_mount_id=$(sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:list --output=json | \
-                       jq -r --arg smb_host "$SMB_HOST" --arg smb_share "$SMB_SHARE_NAME" --arg user_subfolder "$user" \
-                       '.[] | select(.backend == "smb" and .configuration.host == $smb_host and .configuration.share == $smb_share and .configuration.subfolder == $user_subfolder) | .id' | head -n 1)
-
-    if [[ -n "$current_mount_id" ]]; then
-        echo "✅ Montage SMB existant (ID: $current_mount_id) trouvé pour $user. Vérification de l'attribution..."
-        id="$current_mount_id"
-    else
-        echo "Aucun montage existant pour $user. Création d'un nouveau montage..."
-        # Étape 1 : Créer le montage de base.
-        # Nous ne passons que le strict minimum ici, car --config avec host/share/subfolder simultanément posait problème.
-        sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:create \
-            "$NEXTCLOUD_MOUNT_POINT" \
-            smb \
-            password::logincredentials
-
-        # Récupérer l'ID du montage nouvellement créé.
-        # On recherche le plus récent ou un qui n'a pas encore de configuration SMB complète,
-        # ou, mieux, celui qui a le mount_point que nous venons de créer et n'a pas encore de 'applicable_users'.
-        id=$(sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:list --output=json | \
-             jq -r --arg mount_point_val "$NEXTCLOUD_MOUNT_POINT" \
-             '.[] | select(.mount_point == $mount_point_val and (.applicable_users | length == 0 or .applicable_users == null)) | .id' | head -n 1)
-        
-        if [[ -z "$id" ]]; then
-            echo "❌ Erreur CRITIQUE : Impossible d'obtenir un ID de montage après la création de base pour $user."
-            echo "Ceci peut indiquer que la création a échoué ou que le filtre d'ID est incorrect."
-            continue
-        fi
-        echo "Montage de base créé avec l'ID $id."
-
-        # Étape 2 : Configurer les détails SMB (hôte, partage, sous-dossier) en utilisant files_external:config
-        echo "Configuration des détails SMB pour le montage (ID: $id)..."
-        sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:config "$id" host "$SMB_HOST"
-        sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:config "$id" share "$SMB_SHARE_NAME"
-        sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:config "$id" subfolder "$user" # Le sous-dossier est le nom de l'utilisateur
-        sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:config "$id" enable_sharing "true"
-        sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:config "$id" save_login_credentials "true"
-        # Ajoutez ici d'autres options si nécessaire, par exemple le domaine si pertinent
-        # sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:config "$id" domain "$DOMAIN"
-
+echo "Attribution du montage (ID: $MOUNT_ID) à tous les utilisateurs détectés..."
+ALL_USERS=$(sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ user:list --output=json | jq -r 'keys[]')
+USER_LIST_FOR_APPLICABLE=""
+for u in $ALL_USERS; do
+    # On ajoute uniquement les utilisateurs "réels" et non les comptes système
+    if [[ "$u" != "guest" && "$u" != "oc_ldap_user_manager" && "$u" != "nextcloud-bot" ]]; then
+        USER_LIST_FOR_APPLICABLE="$USER_LIST_FOR_APPLICABLE --add-user $u"
     fi
-
-    # Étape 3 : Attribuer le montage SMB à l'utilisateur spécifique.
-    echo "Attribution/Vérification de l'attribution du montage (ID: $id) à l'utilisateur $user..."
-    sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:applicable --mount-id "$id" --user "$user"
-
-    # Vérifier si l'attribution a réussi (optionnel, mais robuste)
-    # Vérifiez la sortie de `files_external:list` après l'attribution.
-    is_assigned=$(sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:list "$user" --output=json | \
-                  jq -r --arg mount_id "$id" --arg user_id "$user" \
-                  '[.[] | select(.id == ($mount_id | tonumber) and (.applicable_users | contains([$user_id])))] | length')
-    
-    if [ "$is_assigned" -gt 0 ]; then
-        echo "✅ Montage configuré et attribué avec succès pour l'utilisateur $user."
-    else
-        echo "❌ Échec de l'attribution du montage (ID: $id) pour l'utilisateur $user. Vérifiez les journaux Nextcloud."
-    fi
-
 done
+
+if [[ -n "$USER_LIST_FOR_APPLICABLE" ]]; then
+    # D'abord, on s'assure qu'il n'y a pas d'anciens utilisateurs/groupes attribués
+    sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:applicable --mount-id "$MOUNT_ID" --remove-all
+    # Ensuite, on attribue à tous les utilisateurs détectés
+    eval "sudo -u \"$NEXTCLOUD_WEB_USER\" php \"$NEXTCLOUD_PATH\"/occ files_external:applicable --mount-id \"$MOUNT_ID\" $USER_LIST_FOR_APPLICABLE"
+    echo "✅ Montage attribué à tous les utilisateurs actifs."
+else
+    echo "Aucun utilisateur à attribuer."
+fi
 
 echo "--- Fin du script d'automatisation SMB ---"
