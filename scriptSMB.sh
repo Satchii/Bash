@@ -15,9 +15,11 @@ NEXTCLOUD_LABEL="Mon Dossier SMB Global (alias MesFichiersSMBTest)"
 
 # Pour l'authentification, nous utiliserons les identifiants de l'utilisateur 'admin' de Windows
 # ou de tout autre utilisateur Windows ayant accès au partage 'Other'.
-# Idéalement, cet utilisateur Windows 'SMB_USER' devrait avoir les droits de lecture/écriture sur le partage 'Other'.
 SMB_USER="admin" # Nom d'utilisateur Windows pour l'authentification au partage SMB
 SMB_PASSWORD="[VOTRE_MOT_DE_PASSE_WINDOWS_POUR_ADMIN]" # Mot de passe Windows pour l'utilisateur 'admin'
+
+# VALEUR CONFIRMÉE PAR 'occ files_external:backends'
+AUTHENTICATION_BACKEND="password::password" # C'est la valeur correcte pour 'Login and password'
 
 DOMAIN="" # Laissez vide si vous n'êtes pas dans un domaine Active Directory spécifique
 
@@ -33,6 +35,7 @@ echo "Partage SMB Windows       : \\\\$SMB_HOST\\$SMB_SHARE_NAME"
 echo "Point de montage interne  : $NEXTCLOUD_MOUNT_POINT"
 echo "Nom affiché dans Nextcloud: $NEXTCLOUD_MOUNT_POINT"
 echo "Utilisateur SMB pour auth.: $SMB_USER"
+echo "Méthode d'authentification: $AUTHENTICATION_BACKEND"
 echo "------------------------------------------------"
 
 # Vérification de la version de jq (outil nécessaire pour parser le JSON)
@@ -49,11 +52,11 @@ if [[ -n "$MOUNT_ID" ]]; then
     echo "✅ Montage SMB existant (ID: $MOUNT_ID) trouvé pour $NEXTCLOUD_MOUNT_POINT. Vérification/Mise à jour de la configuration et de l'attribution..."
 else
     echo "Aucun montage SMB existant pour $NEXTCLOUD_MOUNT_POINT. Création d'un nouveau montage..."
-    # Créer le montage de base.
-    # CHANGEMENT ICI : Suppression de "username::password"
+    # Créer le montage de base AVEC la méthode d'authentification spécifiée
     sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:create \
         "$NEXTCLOUD_MOUNT_POINT" \
-        smb
+        smb \
+        "$AUTHENTICATION_BACKEND" # MAINTENANT CORRECT : "password::password"
 
     # Récupérer l'ID du montage nouvellement créé.
     MOUNT_ID=$(sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:list --output=json | \
@@ -74,7 +77,7 @@ else
     # PAS DE SOUS-DOSSIER.
     sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:config "$MOUNT_ID" enable_sharing "true"
     sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:config "$MOUNT_ID" save_login_credentials "true"
-    # Authentification explicite via config
+    # Authentification explicite via config (IMPORTANT pour que le mot de passe soit enregistré)
     sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:config "$MOUNT_ID" user "$SMB_USER"
     sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ files_external:config "$MOUNT_ID" password "$SMB_PASSWORD"
 
