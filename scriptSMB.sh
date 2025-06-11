@@ -23,7 +23,7 @@ USERS=$(sudo -u "$NEXTCLOUD_WEB_USER" php "$NEXTCLOUD_PATH"/occ user:list --outp
 for USER in $USERS; do # Boucle pour chaque utilisateur
     echo "🔧 Traitement de l'utilisateur : $USER" 
 
-    MOUNT_POINT="/PartageSMB_$USER" 
+    MOUNT_POINT="/$USER" 
     SMB_SHARE_PATH="$SMB_SHARE_BASE/$USER"
 
     # Vérifier si un montage existe déjà pour cet utilisateur
