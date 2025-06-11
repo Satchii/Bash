@@ -2,7 +2,7 @@
 
 # ======================== CONFIGURATION ========================
 SMB_HOST="192.168.100.8" # Ip serveur SMB 
-SMB_SHARE_BASE="Utilisateurs" # Racine du partage. Exemple : \\192.168.100.8\Utilisateurs\<utilisateur>
+SMB_SHARE_BASE="Utilisateurs" # Racine du partage. Exemple : Utilisateurs/<utilisateur>
 
 NEXTCLOUD_PATH="/var/www/nextcloud" # Chemin vers l'installation Nextcloud
 NEXTCLOUD_WEB_USER="www-data" # Utilisateur web de Nextcloud (généralement www-data sur Debian/Ubuntu)
